@@ -19,6 +19,7 @@ export type MissionPresetId =
   | 'energy-security'
   | 'osint-newsroom'
   | 'macro-market-watch'
+  | 'market-intelligence'
   | 'tech-ai-watch'
   | 'good-news-explorer';
 
@@ -249,6 +250,54 @@ export const MISSION_PRESETS: readonly MissionPreset[] = [
       'pipelines',
       'waterways',
       'sanctions',
+      'outages',
+      'weather',
+      'natural',
+    ],
+  },
+  {
+    id: 'market-intelligence',
+    label: 'Market Intelligence',
+    shortLabel: 'Markets+',
+    description: 'Gold, FX, rates, positioning, commodities, crypto, and macro context.',
+    icon: 'M',
+    view: 'global',
+    zoom: 2.3,
+    timeRange: '7d',
+    panels: [
+      'map',
+      'markets',
+      'macro-signals',
+      'macro-tiles',
+      'economic',
+      'liquidity-shifts',
+      'yield-curve',
+      'economic-calendar',
+      'positioning-247',
+      'cot-positioning',
+      'commodities',
+      'energy-complex',
+      'gold-intelligence',
+      'etf-flows',
+      'fx',
+      'crypto',
+      'stablecoins',
+      'fear-greed',
+      'market-breadth',
+      'live-news',
+      'strategic-risk',
+    ],
+    layers: [
+      'financialCenters',
+      'centralBanks',
+      'commodityHubs',
+      'commodityPorts',
+      'economic',
+      'tradeRoutes',
+      'pipelines',
+      'waterways',
+      'sanctions',
+      'conflicts',
       'outages',
       'weather',
       'natural',

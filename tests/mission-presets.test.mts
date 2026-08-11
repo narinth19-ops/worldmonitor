@@ -366,6 +366,7 @@ async function loadEventHandlerManager(): Promise<EventHandlerManagerCtor> {
         }
       }
       export function rssProxyUrl(url) { return url; }
+      export function createCircuitBreaker(fn) { return fn; }
       export function getCSSColor(_name, fallback) { return fallback || '#000000'; }
       export class ExportPanel {}
       export function getCurrentTheme() { return 'dark'; }
@@ -462,7 +463,11 @@ async function loadEventHandlerManager(): Promise<EventHandlerManagerCtor> {
     ['@/services/widget-store', 'export function deleteWidget(){} export function getWidget(){ return null; } export function saveWidget(){} export function isProUser(){ return globalThis.__missionIsProUser === true; } export function isProTierResolved(){ return globalThis.__missionIsProTierResolved === true; }'],
     ['@/services/panel-gating', 'export const PanelGateReason = { NONE: "none", ANONYMOUS: "anonymous", FREE_TIER: "free_tier", PAYMENT_ON_HOLD: "payment_on_hold", RENEWAL_PENDING: "renewal_pending", RENEWAL_FAILED: "renewal_failed", LAPSED: "lapsed" }; export function hasPremiumAccess(){ return globalThis.__missionHasPremium === true; } export function resolveGateAction(){ return () => {}; }'],
     ['@/services/mcp-store', 'export function deleteMcpPanel(){} export function getMcpPanel(){ return null; } export function saveMcpPanel(){}'],
-    ['@/services/runtime', 'export function isDesktopRuntime(){ return false; }'],
+    ['@/services/runtime', `
+      export function isDesktopRuntime(){ return false; }
+      export function toApiUrl(path){ return path; }
+      export function getConfiguredWebApiBaseUrl(){ return ''; }
+    `],
     ['@/services/tauri-bridge', 'export async function invokeTauri(){ return null; }'],
     ['@/services/gps-interference', 'export function getCachedGpsInterference(){ return null; }'],
     ['@/services/ml-worker', 'export const mlWorker = {};'],
@@ -627,6 +632,7 @@ describe('mission preset definitions', () => {
         'energy-security',
         'osint-newsroom',
         'macro-market-watch',
+        'market-intelligence',
         'tech-ai-watch',
         'good-news-explorer',
       ],
@@ -638,10 +644,28 @@ describe('mission preset definitions', () => {
     assert.equal(getMissionPreset('osint-newsroom')?.shortLabel, 'News');
     assert.equal(getMissionPreset('macro-market-watch')?.label, 'Stock Geek');
     assert.equal(getMissionPreset('macro-market-watch')?.shortLabel, 'Stocks');
+    assert.equal(getMissionPreset('market-intelligence')?.label, 'Market Intelligence');
+    assert.equal(getMissionPreset('market-intelligence')?.shortLabel, 'Markets+');
     assert.equal(getMissionPreset('tech-ai-watch')?.label, 'Tech / AI Watcher');
     assert.equal(getMissionPreset('tech-ai-watch')?.shortLabel, 'Tech');
     assert.equal(getMissionPreset('good-news-explorer')?.label, 'Good News Explorer');
     assert.equal(getMissionPreset('good-news-explorer')?.shortLabel, 'Good');
+  });
+
+  it('keeps the local market-intelligence workspace focused on the agreed domains', () => {
+    const panels = getMissionPreset('market-intelligence')?.panels ?? [];
+    for (const panel of [
+      'gold-intelligence',
+      'fx',
+      'yield-curve',
+      'economic-calendar',
+      'positioning-247',
+      'cot-positioning',
+      'commodities',
+      'crypto',
+    ]) {
+      assert.ok(panels.includes(panel), `${panel} must remain in the market-intelligence workspace`);
+    }
   });
 
   it('uses known panel and layer keys without duplicate ids', () => {
