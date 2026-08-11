@@ -12,12 +12,14 @@ const COMMODITIES = [
 
 type SourceStatus = 'available' | 'partial' | 'missing';
 type Freshness = 'current' | 'stale' | 'unknown';
+type TimestampBasis = 'source' | 'retrieval-only' | 'missing';
 
 export interface SnapshotSource<T = unknown> {
   status: SourceStatus;
   source: string;
   retrievedAt: string;
   observedAt: string | null;
+  timestampBasis: TimestampBasis;
   ageSeconds: number | null;
   freshness: Freshness;
   quality: 'good' | 'degraded' | 'unknown';
@@ -107,17 +109,17 @@ interface SourceOptions {
   quality?: SnapshotSource['quality'];
 }
 
-function sourceMetadata(data: unknown, retrievedAt: string, maxAgeSeconds?: number): Pick<SnapshotSource, 'observedAt' | 'ageSeconds' | 'freshness'> {
+function sourceMetadata(data: unknown, retrievedAt: string, maxAgeSeconds?: number): Pick<SnapshotSource, 'observedAt' | 'timestampBasis' | 'ageSeconds' | 'freshness'> {
   const timestamp = observedAt(data);
-  if (!timestamp) return { observedAt: null, ageSeconds: null, freshness: 'unknown' };
+  if (!timestamp) return { observedAt: null, timestampBasis: 'retrieval-only', ageSeconds: null, freshness: 'unknown' };
   const observedMs = Date.parse(timestamp);
   const retrievedMs = Date.parse(retrievedAt);
   if (!Number.isFinite(observedMs) || !Number.isFinite(retrievedMs)) {
-    return { observedAt: timestamp, ageSeconds: null, freshness: 'unknown' };
+    return { observedAt: timestamp, timestampBasis: 'source', ageSeconds: null, freshness: 'unknown' };
   }
   const ageSeconds = Math.max(0, Math.floor((retrievedMs - observedMs) / 1000));
   const freshness: Freshness = maxAgeSeconds == null ? 'unknown' : ageSeconds <= maxAgeSeconds ? 'current' : 'stale';
-  return { observedAt: timestamp, ageSeconds, freshness };
+  return { observedAt: timestamp, timestampBasis: 'source', ageSeconds, freshness };
 }
 
 function available<T>(data: T, retrievedAt: string, options: SourceOptions): SnapshotSource<T> {
@@ -137,7 +139,7 @@ function available<T>(data: T, retrievedAt: string, options: SourceOptions): Sna
 
 function missing(error: unknown, retrievedAt: string, source: string): SnapshotSource {
   return {
-    status: 'missing', source, retrievedAt, observedAt: null, ageSeconds: null, freshness: 'unknown',
+    status: 'missing', source, retrievedAt, observedAt: null, timestampBasis: 'missing', ageSeconds: null, freshness: 'unknown',
     quality: 'degraded', missingFields: [], error: error instanceof Error ? error.message : String(error), data: null,
   };
 }
@@ -160,11 +162,21 @@ function withoutHeavyFields(value: unknown): unknown {
     .map(([key, item]) => [key, withoutHeavyFields(item)]));
 }
 
-function compactGoldIntelligence(value: unknown): unknown {
+function compactGoldIntelligence(value: unknown): { data: unknown; invalidPrevClose: boolean } {
   const obj = record(value);
-  if (!obj) return value;
+  if (!obj) return { data: value, invalidPrevClose: false };
   const { cbReserves: _ignoredCentralBanks, ...safe } = obj;
-  return withoutHeavyFields(safe);
+  const session = record(safe.session);
+  const goldPrice = typeof safe.goldPrice === 'number' ? safe.goldPrice : null;
+  const goldChangePct = typeof safe.goldChangePct === 'number' ? safe.goldChangePct : null;
+  const prevClose = typeof session?.prevClose === 'number' ? session.prevClose : null;
+  const impliedChangePct = goldPrice != null && prevClose != null && prevClose > 0
+    ? ((goldPrice - prevClose) / prevClose) * 100
+    : null;
+  const invalidPrevClose = impliedChangePct != null && goldChangePct != null
+    && Math.abs(impliedChangePct - goldChangePct) > 0.5;
+  if (invalidPrevClose && session) safe.session = { ...session, prevClose: null };
+  return { data: withoutHeavyFields(safe), invalidPrevClose };
 }
 
 async function defaultDependencies(): Promise<SnapshotDependencies> {
@@ -237,7 +249,19 @@ export async function collectLocalMarketSnapshot(
   const compact = (source: SnapshotSource, transform: (value: unknown) => unknown = withoutHeavyFields): SnapshotSource => (
     source.data == null ? source : { ...source, data: transform(source.data) }
   );
-  const goldIntelligence = compact(goldIntelligenceRaw, compactGoldIntelligence);
+  const compactGold = goldIntelligenceRaw.data == null
+    ? { data: null, invalidPrevClose: false }
+    : compactGoldIntelligence(goldIntelligenceRaw.data);
+  const goldIntelligence: SnapshotSource = {
+    ...goldIntelligenceRaw,
+    data: compactGold.data,
+    ...(compactGold.invalidPrevClose ? {
+      status: 'partial' as const,
+      quality: 'degraded' as const,
+      missingFields: [...goldIntelligenceRaw.missingFields, 'session.prevClose'],
+      error: 'session.prevClose was removed because its implied daily change conflicts with goldChangePct',
+    } : {}),
+  };
   const hyperliquid = compact(hyperliquidRaw);
   const etfFlows = compact(etfFlowsRaw);
   const stablecoins = compact(stablecoinsRaw);
