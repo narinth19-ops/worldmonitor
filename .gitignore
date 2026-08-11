@@ -103,7 +103,6 @@ api-cache.json
 verbose-mode.json
 skills-lock.json
 tmp/
-.local/
 .context/
 
 # Local planning documents (not for public repo)

@@ -1609,6 +1609,31 @@ export class EventHandlerManager implements AppModule {
   }
 
   setupExportPanel(): void {
+    const headerRight = this.ctx.container.querySelector('.header-right');
+    if (headerRight && !headerRight.querySelector('.market-snapshot-export-btn')) {
+      const snapshotButton = document.createElement('button');
+      snapshotButton.className = 'export-btn market-snapshot-export-btn';
+      snapshotButton.textContent = 'GPT ↓';
+      snapshotButton.title = 'Export a local market snapshot for ChatGPT or Codex (no API key)';
+      snapshotButton.setAttribute('aria-label', snapshotButton.title);
+      snapshotButton.addEventListener('click', async () => {
+        if (snapshotButton.disabled) return;
+        snapshotButton.disabled = true;
+        try {
+          const { collectLocalMarketSnapshot, downloadLocalMarketSnapshot } = await import('@/services/local-market-snapshot');
+          const snapshot = await collectLocalMarketSnapshot(this.ctx.latestMarkets);
+          downloadLocalMarketSnapshot(snapshot);
+          showToast('Market snapshot exported. Attach the JSON or Markdown file to ChatGPT or Codex.');
+        } catch (error) {
+          console.warn('[market-snapshot] export failed:', error);
+          showToast('Market snapshot export failed. Please try again.');
+        } finally {
+          snapshotButton.disabled = false;
+        }
+      });
+      headerRight.insertBefore(snapshotButton, headerRight.firstChild);
+    }
+
     const getExportData = () => {
       const allCards = this.ctx.correlationEngine?.getAllCards() ?? [];
       const disabledCount = this.ctx.disabledSources.size;

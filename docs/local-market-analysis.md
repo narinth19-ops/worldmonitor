@@ -1,46 +1,28 @@
 # Local Market Snapshot and GPT Analysis
 
-This local-only workflow reads the authorized WorldMonitor MCP surface. It does
-not expose a new public endpoint, read Redis directly, or require a continuously
-running local server.
+This local-only workflow exports the same public data the dashboard panels load.
+It does not expose a new endpoint, read Redis directly, require API keys, or
+require a continuously running local server.
 
-## Configuration
+## Export a snapshot
 
-Add the keys to `.env.local` (already ignored by Git):
+Run the local WorldMonitor app and click the `GPT ↓` button in the header. The
+browser downloads two files:
 
-```dotenv
-WORLDMONITOR_API_KEY=wm_...
-OPENAI_API_KEY=sk-...
-```
+- `worldmonitor-market-snapshot-<timestamp>.json`
+- `worldmonitor-market-snapshot-<timestamp>.md`
 
-`WORLDMONITOR_API_KEY` is required for both commands. `OPENAI_API_KEY` is only
-required for GPT analysis.
+The export loads point-in-time data for Gold, FX, Macro/Rates, Commodities, and
+Crypto through the dashboard's existing browser RPC clients. A failed source is
+recorded as missing; the exporter never fills in an absent value.
 
-## Commands
+## Analyze with ChatGPT or Codex
 
-Create a point-in-time JSON and Markdown snapshot:
+Attach either downloaded file to a ChatGPT or Codex conversation and request a
+current market assessment. No OpenAI API key is required because the analysis
+happens in the conversation rather than through the API.
 
-```bash
-npm run market:snapshot
-```
-
-Create the snapshot and a structured GPT market assessment:
-
-```bash
-npm run market:analyze
-```
-
-Outputs are written to `.local/market-analysis/`, which is ignored by Git:
-
-- `market-snapshot.json`
-- `market-snapshot.md`
-- `gpt-market-analysis.json`
-- `gpt-market-analysis.md`
-
-Use `-- --output-dir <path>` to choose another directory or `-- --model <id>`
-to override the default OpenAI model.
-
-The analysis contract separates observed facts from interpretation and lists
-directional evidence, conflicts, risks, missing or stale data, and what to watch
-next. It deliberately excludes predictive scores, arbitrary weights,
-probabilities, and fabricated replacements for missing data.
+The Markdown file includes the analysis contract: separate observed facts from
+interpretation; list bullish, bearish, and neutral evidence, conflicts, risks,
+missing or stale data, and what to watch next. Do not produce predictive scores,
+arbitrary weights, probabilities, or fabricated replacements for missing data.
