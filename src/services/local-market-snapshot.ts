@@ -11,18 +11,23 @@ const COMMODITIES = [
 ];
 
 type SourceStatus = 'available' | 'partial' | 'missing';
+type Freshness = 'current' | 'stale' | 'unknown';
 
 export interface SnapshotSource<T = unknown> {
   status: SourceStatus;
+  source: string;
   retrievedAt: string;
   observedAt: string | null;
-  freshness: 'current' | 'stale' | 'unknown';
+  ageSeconds: number | null;
+  freshness: Freshness;
+  quality: 'good' | 'degraded' | 'unknown';
+  missingFields: string[];
   error: string | null;
   data: T | null;
 }
 
 export interface LocalMarketSnapshot {
-  schemaVersion: '1.0.0';
+  schemaVersion: '1.1.0';
   generatedAt: string;
   purpose: 'current-market-assessment';
   caveat: string;
@@ -34,6 +39,8 @@ export interface LocalMarketSnapshot {
     gold: Record<string, SnapshotSource>;
     fx: Record<string, SnapshotSource>;
     macroRates: Record<string, SnapshotSource>;
+    positioning: Record<string, SnapshotSource>;
+    sentimentLiquidity: Record<string, SnapshotSource>;
     commodities: Record<string, SnapshotSource>;
     crypto: Record<string, SnapshotSource>;
   };
@@ -47,6 +54,13 @@ export interface SnapshotDependencies {
   fetchEuCurve: () => Promise<unknown>;
   fetchCalendar: () => Promise<unknown>;
   fetchCot: () => Promise<unknown>;
+  fetchGoldIntelligence: () => Promise<unknown>;
+  fetchHyperliquidFlow: () => Promise<unknown>;
+  fetchEtfFlows: () => Promise<unknown>;
+  fetchStablecoins: () => Promise<unknown>;
+  fetchFearGreed: () => Promise<unknown>;
+  fetchMarketBreadth: () => Promise<unknown>;
+  fetchMacroSignals: () => Promise<unknown>;
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -62,31 +76,95 @@ function nonEmptyString(value: unknown): string | null {
 function observedAt(value: unknown): string | null {
   const obj = record(value);
   if (!obj) return null;
-  for (const key of ['reportDate', 'asOf', 'date', 'updatedAt', 'fetchedAt']) {
+  for (const key of ['reportDate', 'asOf', 'asOfDate', 'date', 'updatedAt', 'fetchedAt', 'timestamp', 'ts']) {
     const candidate = nonEmptyString(obj[key]);
     if (candidate) return candidate;
+  }
+  for (const key of ['data', 'summary', 'meta']) {
+    const nested = observedAt(obj[key]);
+    if (nested) return nested;
+  }
+  const results = record(obj.results);
+  if (results) {
+    const dates = Object.values(results).flatMap((entry) => {
+      const observations = record(entry)?.observations;
+      if (!Array.isArray(observations)) return [];
+      return observations.map((item) => nonEmptyString(record(item)?.date)).filter((date): date is string => date !== null);
+    });
+    if (dates.length) {
+      dates.sort();
+      return dates[dates.length - 1] ?? null;
+    }
   }
   return null;
 }
 
-function available<T>(data: T, retrievedAt: string, status: SourceStatus = 'available'): SnapshotSource<T> {
-  return { status, retrievedAt, observedAt: observedAt(data), freshness: 'unknown', error: null, data };
+interface SourceOptions {
+  source: string;
+  maxAgeSeconds?: number;
+  missingFields?: string[];
+  status?: SourceStatus;
+  quality?: SnapshotSource['quality'];
 }
 
-function missing(error: unknown, retrievedAt: string): SnapshotSource {
+function sourceMetadata(data: unknown, retrievedAt: string, maxAgeSeconds?: number): Pick<SnapshotSource, 'observedAt' | 'ageSeconds' | 'freshness'> {
+  const timestamp = observedAt(data);
+  if (!timestamp) return { observedAt: null, ageSeconds: null, freshness: 'unknown' };
+  const observedMs = Date.parse(timestamp);
+  const retrievedMs = Date.parse(retrievedAt);
+  if (!Number.isFinite(observedMs) || !Number.isFinite(retrievedMs)) {
+    return { observedAt: timestamp, ageSeconds: null, freshness: 'unknown' };
+  }
+  const ageSeconds = Math.max(0, Math.floor((retrievedMs - observedMs) / 1000));
+  const freshness: Freshness = maxAgeSeconds == null ? 'unknown' : ageSeconds <= maxAgeSeconds ? 'current' : 'stale';
+  return { observedAt: timestamp, ageSeconds, freshness };
+}
+
+function available<T>(data: T, retrievedAt: string, options: SourceOptions): SnapshotSource<T> {
+  const missingFields = options.missingFields ?? [];
+  const metadata = sourceMetadata(data, retrievedAt, options.maxAgeSeconds);
   return {
-    status: 'missing', retrievedAt, observedAt: null, freshness: 'unknown',
-    error: error instanceof Error ? error.message : String(error), data: null,
+    status: options.status ?? (missingFields.length ? 'partial' : 'available'),
+    source: options.source,
+    retrievedAt,
+    ...metadata,
+    quality: options.quality ?? (missingFields.length || metadata.freshness === 'stale' ? 'degraded' : 'good'),
+    missingFields,
+    error: null,
+    data,
   };
 }
 
-async function settledSource<T>(promise: Promise<T>, retrievedAt: string): Promise<SnapshotSource<T>> {
+function missing(error: unknown, retrievedAt: string, source: string): SnapshotSource {
+  return {
+    status: 'missing', source, retrievedAt, observedAt: null, ageSeconds: null, freshness: 'unknown',
+    quality: 'degraded', missingFields: [], error: error instanceof Error ? error.message : String(error), data: null,
+  };
+}
+
+async function settledSource<T>(promise: Promise<T>, retrievedAt: string, options: SourceOptions): Promise<SnapshotSource<T>> {
   try {
     const value = await promise;
-    return available(value, retrievedAt);
+    return available(value, retrievedAt, options);
   } catch (error) {
-    return missing(error, retrievedAt) as SnapshotSource<T>;
+    return missing(error, retrievedAt, options.source) as SnapshotSource<T>;
   }
+}
+
+function withoutHeavyFields(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withoutHeavyFields);
+  const obj = record(value);
+  if (!obj) return value;
+  return Object.fromEntries(Object.entries(obj)
+    .filter(([key]) => !['sparkline', 'goldSparkline', 'sparkline90d', 'sparkFunding', 'sparkOi', 'sparkScore', 'history'].includes(key))
+    .map(([key, item]) => [key, withoutHeavyFields(item)]));
+}
+
+function compactGoldIntelligence(value: unknown): unknown {
+  const obj = record(value);
+  if (!obj) return value;
+  const { cbReserves: _ignoredCentralBanks, ...safe } = obj;
+  return withoutHeavyFields(safe);
 }
 
 async function defaultDependencies(): Promise<SnapshotDependencies> {
@@ -110,6 +188,13 @@ async function defaultDependencies(): Promise<SnapshotDependencies> {
     fetchEuCurve: () => economic.getEuYieldCurve({}),
     fetchCalendar: () => economic.getEconomicCalendar({ fromDate, toDate }),
     fetchCot: () => market.getCotPositioning({}),
+    fetchGoldIntelligence: () => market.getGoldIntelligence({}),
+    fetchHyperliquidFlow: () => market.getHyperliquidFlow({}),
+    fetchEtfFlows: () => market.listEtfFlows({}),
+    fetchStablecoins: () => market.listStablecoinMarkets({ coins: [] }),
+    fetchFearGreed: () => market.getFearGreedIndex({}),
+    fetchMarketBreadth: () => market.getMarketBreadthHistory({}),
+    fetchMacroSignals: () => economic.getMacroSignals({}),
   };
 }
 
@@ -120,23 +205,48 @@ export async function collectLocalMarketSnapshot(
 ): Promise<LocalMarketSnapshot> {
   const sources = deps ?? await defaultDependencies();
   const retrievedAt = now.toISOString();
-  const [commodities, crypto, fx, fred, euCurve, calendar, cot] = await Promise.all([
-    settledSource(sources.fetchCommodities(COMMODITIES), retrievedAt),
-    settledSource(sources.fetchCryptoData(), retrievedAt),
-    settledSource(sources.fetchFx(), retrievedAt),
-    settledSource(sources.fetchFred(), retrievedAt),
-    settledSource(sources.fetchEuCurve(), retrievedAt),
-    settledSource(sources.fetchCalendar(), retrievedAt),
-    settledSource(sources.fetchCot(), retrievedAt),
+  const [commodities, crypto, fx, fred, euCurve, calendar, cot, goldIntelligenceRaw, hyperliquidRaw, etfFlowsRaw, stablecoinsRaw, fearGreedRaw, marketBreadthRaw, macroSignalsRaw] = await Promise.all([
+    settledSource(sources.fetchCommodities(COMMODITIES), retrievedAt, { source: 'market quotes' }),
+    settledSource(sources.fetchCryptoData(), retrievedAt, { source: 'crypto markets' }),
+    settledSource(sources.fetchFx(), retrievedAt, { source: 'ECB/market FX panel', maxAgeSeconds: 172_800 }),
+    settledSource(sources.fetchFred(), retrievedAt, { source: 'FRED', maxAgeSeconds: 432_000 }),
+    settledSource(sources.fetchEuCurve(), retrievedAt, { source: 'ECB AAA yield curve', maxAgeSeconds: 432_000 }),
+    settledSource(sources.fetchCalendar(), retrievedAt, { source: 'economic calendar' }),
+    settledSource(sources.fetchCot(), retrievedAt, { source: 'CFTC COT', maxAgeSeconds: 864_000 }),
+    settledSource(sources.fetchGoldIntelligence(), retrievedAt, { source: 'gold intelligence', maxAgeSeconds: 172_800 }),
+    settledSource(sources.fetchHyperliquidFlow(), retrievedAt, { source: 'Hyperliquid 24/7 positioning', maxAgeSeconds: 900 }),
+    settledSource(sources.fetchEtfFlows(), retrievedAt, { source: 'ETF flows', maxAgeSeconds: 172_800 }),
+    settledSource(sources.fetchStablecoins(), retrievedAt, { source: 'stablecoin markets', maxAgeSeconds: 7_200 }),
+    settledSource(sources.fetchFearGreed(), retrievedAt, { source: 'fear and greed', maxAgeSeconds: 7_200 }),
+    settledSource(sources.fetchMarketBreadth(), retrievedAt, { source: 'market breadth', maxAgeSeconds: 172_800 }),
+    settledSource(sources.fetchMacroSignals(), retrievedAt, { source: 'macro signals', maxAgeSeconds: 7_200 }),
   ]);
   const commodityData = commodities.data && record(commodities.data);
   const commodityQuotes = Array.isArray(commodityData?.data) ? commodityData.data as MarketData[] : [];
   const goldQuotes = commodityQuotes.filter((quote) => quote.symbol === 'GC=F');
-  const dashboard = available(dashboardMarkets, retrievedAt, dashboardMarkets.length > 0 ? 'available' : 'missing');
+  const compactDashboard = dashboardMarkets
+    .filter((quote) => ['DX-Y.NYB', '^TNX', '^GSPC', 'GC=F', 'BTC-USD'].includes(quote.symbol))
+    .map(({ sparkline: _sparkline, ...quote }) => quote);
+  const dashboard = available(compactDashboard, retrievedAt, {
+    source: 'dashboard cross-asset cache',
+    status: compactDashboard.length > 0 ? 'available' : 'missing',
+    quality: compactDashboard.length > 0 ? 'good' : 'degraded',
+  });
   if (dashboardMarkets.length === 0) dashboard.error = 'Dashboard market cache was empty at export time';
 
+  const compact = (source: SnapshotSource, transform: (value: unknown) => unknown = withoutHeavyFields): SnapshotSource => (
+    source.data == null ? source : { ...source, data: transform(source.data) }
+  );
+  const goldIntelligence = compact(goldIntelligenceRaw, compactGoldIntelligence);
+  const hyperliquid = compact(hyperliquidRaw);
+  const etfFlows = compact(etfFlowsRaw);
+  const stablecoins = compact(stablecoinsRaw);
+  const fearGreed = compact(fearGreedRaw);
+  const marketBreadth = compact(marketBreadthRaw);
+  const macroSignals = compact(macroSignalsRaw);
+
   return {
-    schemaVersion: '1.0.0',
+    schemaVersion: '1.1.0',
     generatedAt: retrievedAt,
     purpose: 'current-market-assessment',
     caveat: 'Point-in-time browser observations only. Missing values are null and must not be inferred.',
@@ -145,11 +255,19 @@ export async function collectLocalMarketSnapshot(
       prohibited: ['predictive scores', 'arbitrary weights', 'probabilities', 'fabricated values'],
     },
     domains: {
-      gold: { quotes: available(goldQuotes, retrievedAt, goldQuotes.length ? 'available' : 'missing'), cot },
-      fx: { dashboardQuotes: dashboard, panel: fx },
-      macroRates: { fred, euYieldCurve: euCurve, economicCalendar: calendar },
-      commodities: { quotes: commodities, cot },
-      crypto: { quotes: crypto },
+      gold: {
+        quotes: available(goldQuotes.map(({ sparkline: _sparkline, ...quote }) => quote), retrievedAt, {
+          source: 'market quotes', status: goldQuotes.length ? 'available' : 'missing', quality: goldQuotes.length ? 'good' : 'degraded',
+        }),
+        intelligence: goldIntelligence,
+        cot,
+      },
+      fx: { crossAssetDrivers: dashboard, panel: compact(fx) },
+      macroRates: { fred: compact(fred), euYieldCurve: compact(euCurve), economicCalendar: compact(calendar), macroSignals },
+      positioning: { hyperliquid24x7: hyperliquid, cot },
+      sentimentLiquidity: { fearGreed, marketBreadth, etfFlows, stablecoins },
+      commodities: { quotes: compact(commodities), cot },
+      crypto: { quotes: compact(crypto), etfFlows, stablecoins, macroSignals },
     },
   };
 }

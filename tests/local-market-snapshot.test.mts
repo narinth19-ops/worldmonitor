@@ -16,6 +16,13 @@ function deps(overrides: Partial<SnapshotDependencies> = {}): SnapshotDependenci
     fetchEuCurve: async () => ({ data: { rates: { '10Y': 2.5 } } }),
     fetchCalendar: async () => ({ events: [] }),
     fetchCot: async () => ({ reportDate: '2026-08-07', instruments: [] }),
+    fetchGoldIntelligence: async () => ({ updatedAt: '2026-08-10T23:59:00Z', goldPrice: 2500, drivers: [], cbReserves: { totalTonnes: 0 }, goldSparkline: [1, 2] }),
+    fetchHyperliquidFlow: async () => ({ fetchedAt: '2026-08-10T23:58:00Z', warmup: false, assets: [{ symbol: 'BTC', sparkFunding: [1] }] }),
+    fetchEtfFlows: async () => ({ updatedAt: '2026-08-10T20:00:00Z', etfs: [] }),
+    fetchStablecoins: async () => ({ updatedAt: '2026-08-10T23:30:00Z', stablecoins: [] }),
+    fetchFearGreed: async () => ({ updatedAt: '2026-08-10T23:30:00Z', cnnFearGreed: 50, history: [1] }),
+    fetchMarketBreadth: async () => ({ updatedAt: '2026-08-10T20:00:00Z', currentPctAbove50d: 55, history: [1] }),
+    fetchMacroSignals: async () => ({ timestamp: '2026-08-10T23:30:00Z', verdict: 'NEUTRAL', signals: { liquidity: { status: 'normal', sparkline: [1] } } }),
     ...overrides,
   } as SnapshotDependencies;
 }
@@ -25,9 +32,14 @@ describe('local browser market snapshot', () => {
     const snapshot = await collectLocalMarketSnapshot([], deps(), new Date('2026-08-11T00:00:00Z'));
     assert.equal(snapshot.domains.gold.quotes.status, 'available');
     assert.equal((snapshot.domains.gold.quotes.data as Array<{ price: number }>)[0]?.price, 2500);
-    assert.equal(snapshot.domains.fx.dashboardQuotes.status, 'missing');
+    assert.equal(snapshot.domains.fx.crossAssetDrivers.status, 'missing');
     assert.equal(snapshot.domains.gold.cot.observedAt, '2026-08-07');
-    assert.equal(snapshot.domains.macroRates.fred.freshness, 'unknown');
+    assert.equal(snapshot.domains.macroRates.fred.freshness, 'current');
+    assert.equal(snapshot.domains.positioning.hyperliquid24x7.freshness, 'current');
+    assert.equal(snapshot.domains.gold.intelligence.observedAt, '2026-08-10T23:59:00Z');
+    assert.equal((snapshot.domains.gold.intelligence.data as Record<string, unknown>).cbReserves, undefined);
+    assert.equal((snapshot.domains.gold.intelligence.data as Record<string, unknown>).goldSparkline, undefined);
+    assert.equal((snapshot.domains.sentimentLiquidity.fearGreed.data as Record<string, unknown>).history, undefined);
   });
 
   it('records an individual source failure instead of fabricating a value', async () => {
@@ -39,11 +51,20 @@ describe('local browser market snapshot', () => {
     assert.equal(snapshot.domains.macroRates.euYieldCurve.error, 'EU curve unavailable');
   });
 
+  it('marks an aged source stale and degrades its quality', async () => {
+    const snapshot = await collectLocalMarketSnapshot([], deps({
+      fetchHyperliquidFlow: async () => ({ fetchedAt: '2026-08-10T20:00:00Z', warmup: false, assets: [] }),
+    }), new Date('2026-08-11T00:00:00Z'));
+    assert.equal(snapshot.domains.positioning.hyperliquid24x7.freshness, 'stale');
+    assert.equal(snapshot.domains.positioning.hyperliquid24x7.quality, 'degraded');
+  });
+
   it('embeds the no-score and no-fabrication contract in Markdown', async () => {
     const snapshot = await collectLocalMarketSnapshot([], deps(), new Date('2026-08-11T00:00:00Z'));
     const markdown = localMarketSnapshotToMarkdown(snapshot);
     assert.match(markdown, /predictive scores/);
     assert.match(markdown, /fabricated values/);
-    assert.match(markdown, /"freshness": "unknown"/);
+    assert.match(markdown, /"ageSeconds"/);
+    assert.match(markdown, /"quality"/);
   });
 });
