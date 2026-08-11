@@ -434,7 +434,7 @@ function polymarketPlugin(): Plugin {
  * the same handler pipeline as the Vercel catch-all gateway. Other /api/*
  * paths fall through to existing proxy rules.
  */
-function sebufApiPlugin(): Plugin {
+function sebufApiPlugin(useUpstreamApi = false): Plugin {
   // Cache router across requests (H-13 fix). Invalidated by Vite's module graph on HMR.
   let cachedRouter: Awaited<ReturnType<typeof buildRouter>> | null = null;
   let cachedCorsMod: any = null;
@@ -585,6 +585,7 @@ function sebufApiPlugin(): Plugin {
       };
 
       server.middlewares.use(async (req, res, next) => {
+        if (useUpstreamApi) return next();
         // Intercept sebuf routes in two forms:
         //  - standard /api/{domain}/v{N}/* (domain-first, e.g. /api/market/v1/...)
         //  - partner-URL-preservation /api/v{N}/{domain}/* (version-first, e.g.
@@ -870,6 +871,7 @@ export default defineConfig(({ mode }) => {
       : 3000;
 
   const isE2E = process.env.VITE_E2E === '1';
+  const useUpstreamApi = env.WORLDMONITOR_USE_UPSTREAM_API === 'true';
   const isDesktopBuild = process.env.VITE_DESKTOP_RUNTIME === '1';
   const activeVariant = process.env.VITE_VARIANT || 'full';
   const activeMeta = VARIANT_META[activeVariant] || VARIANT_META.full;
@@ -916,7 +918,7 @@ export default defineConfig(({ mode }) => {
       rssProxyPlugin(),
       youtubeLivePlugin(),
       gpsjamDevPlugin(),
-      sebufApiPlugin(),
+      sebufApiPlugin(useUpstreamApi),
       brotliPrecompressPlugin(),
       VitePWA({
         registerType: 'autoUpdate',
@@ -1668,6 +1670,18 @@ export default defineConfig(({ mode }) => {
             });
           },
         },
+        ...(useUpstreamApi ? {
+          '/api': {
+            target: 'https://api.worldmonitor.app',
+            changeOrigin: true,
+            secure: true,
+            cookieDomainRewrite: '',
+            headers: {
+              origin: 'https://worldmonitor.app',
+              referer: 'https://worldmonitor.app/',
+            },
+          },
+        } : {}),
       },
     },
   };

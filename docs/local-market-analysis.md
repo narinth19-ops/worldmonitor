@@ -4,6 +4,11 @@ This local-only workflow exports the same public data the dashboard panels load.
 It does not expose a new endpoint, read Redis directly, require API keys, or
 require a continuously running local server.
 
+For local development without Docker or a local Redis instance, set
+`WORLDMONITOR_USE_UPSTREAM_API=true` in `.env.local`. Vite then proxies `/api`
+requests to the WorldMonitor upstream API while keeping the browser on the
+localhost origin.
+
 ## Export a snapshot
 
 Run the local WorldMonitor app and click the `GPT ↓` button in the header. The
