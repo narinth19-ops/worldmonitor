@@ -498,6 +498,8 @@ export interface EconomicEvent {
   estimate: string;
   previous: string;
   unit: string;
+  releaseTime: string;
+  timeZone: string;
 }
 
 export interface GetCrudeInventoriesRequest {

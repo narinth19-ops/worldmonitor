@@ -23,6 +23,7 @@ import { captureSilentError } from '../../../../api/_sentry-edge.js';
 // (#5856 review). esbuild inlines it for the edge bundle.
 import { gdeltSeenDateToMs } from '../../../../scripts/_conflict-gdelt.mjs';
 import { tokenizeForMatch, findMatchingKeywords } from '../../../../src/utils/keyword-match';
+import { buildMacroEventContext, type MacroCalendarEvent } from '../../../../src/services/macro-event-context';
 import {
   GAS_STORAGE_COUNTRIES_KEY,
   GAS_STORAGE_KEY_PREFIX,
@@ -47,6 +48,8 @@ export interface AnalystContext {
   forecasts: string;
   marketData: string;
   macroSignals: string;
+  macroEvents?: string;
+  goldContext?: string;
   predictionMarkets: string;
   countryBrief: string;
   liveHeadlines: string;
@@ -226,6 +229,68 @@ export function buildMacroSignals(data: unknown): string {
     if (name) lines.push(`- ${name}`);
   }
   return lines.length ? `Macro Signals:\n${lines.join('\n')}` : '';
+}
+
+export function buildMacroEvents(data: unknown): string {
+  if (!data || typeof data !== 'object') return '';
+  const events = Array.isArray((data as Record<string, unknown>).events)
+    ? (data as Record<string, unknown>).events as MacroCalendarEvent[]
+    : [];
+  const contexts = buildMacroEventContext(events).slice(0, 8);
+  if (!contexts.length) return '';
+  const lines = contexts.map((event) => {
+    const value = (raw: string) => `${sanitizeForPromptLine(raw)}${event.unit ? ` ${sanitizeForPromptLine(event.unit)}` : ''}`;
+    const values = [
+      event.previous ? `previous ${value(event.previous)}` : '',
+      event.consensus ? `consensus ${value(event.consensus)}` : 'consensus unavailable',
+      event.actual ? `actual ${value(event.actual)}` : '',
+    ].filter(Boolean).join(', ');
+    const timing = event.releaseTime && event.timeZone
+      ? `${event.date} ${event.releaseTime} ${sanitizeForPromptLine(event.timeZone)}`
+      : event.date;
+    return `- ${timing} ${sanitizeForPromptLine(event.event)} (${event.status}; ${values}). ` +
+      `Hotter/stronger: ${event.hotterOrStronger} Cooler/weaker: ${event.coolerOrWeaker}`;
+  });
+  return `Tier 1 US Macro Events:\n${lines.join('\n')}`;
+}
+
+export function buildGoldContext(commodities: unknown, extended: unknown, cot: unknown, etf: unknown): string {
+  const lines: string[] = [];
+  const commodityData = commodities && typeof commodities === 'object' ? commodities as Record<string, unknown> : {};
+  const quotes = Array.isArray(commodityData.quotes) ? commodityData.quotes as Array<Record<string, unknown>> : [];
+  const gold = quotes.find((quote) => quote.symbol === 'GC=F');
+  if (gold && typeof gold.price === 'number') {
+    const change = typeof gold.change === 'number' ? ` (${formatChange(gold.change)})` : '';
+    lines.push(`Gold: $${gold.price.toFixed(2)}${change}`);
+  }
+
+  const extendedData = extended && typeof extended === 'object' ? extended as Record<string, unknown> : {};
+  const drivers = Array.isArray(extendedData.drivers) ? extendedData.drivers as Array<Record<string, unknown>> : [];
+  for (const symbol of ['DX-Y.NYB', '^TNX']) {
+    const driver = drivers.find((item) => item.symbol === symbol);
+    if (!driver || typeof driver.value !== 'number') continue;
+    const label = symbol === '^TNX' ? 'US 10Y yield' : 'DXY';
+    const change = typeof driver.changePct === 'number' ? ` (${formatChange(driver.changePct)})` : '';
+    lines.push(`${label}: ${driver.value.toFixed(2)}${change}`);
+  }
+
+  const cotData = cot && typeof cot === 'object' ? cot as Record<string, unknown> : {};
+  const instruments = Array.isArray(cotData.instruments) ? cotData.instruments as Array<Record<string, unknown>> : [];
+  const goldCot = instruments.find((item) => item.code === 'GC');
+  const managedMoney = goldCot?.managedMoney && typeof goldCot.managedMoney === 'object'
+    ? goldCot.managedMoney as Record<string, unknown>
+    : null;
+  if (managedMoney && typeof managedMoney.netPct === 'number') {
+    lines.push(`Gold COT managed-money net: ${managedMoney.netPct.toFixed(1)}% (report ${sanitizeForPromptLine(safeStr(goldCot?.reportDate)) || 'date unavailable'})`);
+  }
+
+  const etfData = etf && typeof etf === 'object' ? etf as Record<string, unknown> : {};
+  if (typeof etfData.tonnes === 'number') {
+    const week = typeof etfData.changeW1Tonnes === 'number' ? `, 1W ${etfData.changeW1Tonnes >= 0 ? '+' : ''}${etfData.changeW1Tonnes.toFixed(2)}t` : '';
+    const month = typeof etfData.changeM1Tonnes === 'number' ? `, 1M ${etfData.changeM1Tonnes >= 0 ? '+' : ''}${etfData.changeM1Tonnes.toFixed(2)}t` : '';
+    lines.push(`Gold ETF holdings: ${etfData.tonnes.toFixed(2)}t${week}${month}`);
+  }
+  return lines.length ? `Gold Macro Context:\n${lines.join('\n')}` : '';
 }
 
 export function buildPredictionMarkets(data: unknown): string {
@@ -950,6 +1015,8 @@ const SOURCE_LABELS: Array<[keyof Omit<AnalystContext, 'timestamp' | 'degraded' 
   ['coalSpotPrice', 'CoalSpot'],
   ['gasSpotTtf',    'GasTTF'],
   ['macroSignals', 'Macro'],
+  ['macroEvents', 'MacroEvents'],
+  ['goldContext', 'GoldContext'],
   ['predictionMarkets', 'Prediction'],
   ['countryBrief', 'Country'],
   ['liveHeadlines', 'Live'],
@@ -977,6 +1044,10 @@ export async function assembleAnalystContext(
     stocks: 'market:stocks-bootstrap:v1',
     commodities: 'market:commodities-bootstrap:v1',
     macroSignals: 'economic:macro-signals:v1',
+    macroEvents: 'economic:econ-calendar:v1',
+    goldExtended: 'market:gold-extended:v1',
+    goldCot: 'market:cot:v1',
+    goldEtf: 'market:gold-etf-flows:v1',
     predictions: 'prediction:markets-bootstrap:v1',
     energyExposure: 'energy:exposure:v1:index',
   };
@@ -999,6 +1070,8 @@ export async function assembleAnalystContext(
   const needsEnergyIntel = new Set(['economic', 'geo', 'all']).has(resolvedDomain);
   const needsSpr = new Set(['economic', 'all']).has(resolvedDomain);
   const needsRefinery = new Set(['economic', 'all']).has(resolvedDomain);
+  const needsGoldContext = new Set(['market', 'economic', 'all']).has(resolvedDomain);
+  const needsMacroEvents = new Set(['market', 'economic', 'all']).has(resolvedDomain);
 
   const iso2 = geoContext && /^[A-Z]{2}$/i.test(geoContext) ? geoContext.toUpperCase() : null;
   const needsProductSupply = iso2 != null && new Set(['economic', 'geo', 'all']).has(resolvedDomain);
@@ -1014,6 +1087,10 @@ export async function assembleAnalystContext(
     stocksResult,
     commoditiesResult,
     macroResult,
+    macroEventsResult,
+    goldExtendedResult,
+    goldCotResult,
+    goldEtfResult,
     predResult,
     energyExposureResult,
     countryResult,
@@ -1036,6 +1113,10 @@ export async function assembleAnalystContext(
     getCachedJson(keys.stocks, true),
     getCachedJson(keys.commodities, true),
     getCachedJson(keys.macroSignals, true),
+    needsMacroEvents ? getCachedJson(keys.macroEvents, true) : Promise.resolve(null),
+    needsGoldContext ? getCachedJson(keys.goldExtended, true) : Promise.resolve(null),
+    needsGoldContext ? getCachedJson(keys.goldCot, true) : Promise.resolve(null),
+    needsGoldContext ? getCachedJson(keys.goldEtf, true) : Promise.resolve(null),
     getCachedJson(keys.predictions, true),
     needsEnergyExposure ? getCachedJson(keys.energyExposure, true) : Promise.resolve(null),
     countryKey ? getCachedJson(countryKey, true) : Promise.resolve(null),
@@ -1067,6 +1148,8 @@ export async function assembleAnalystContext(
     insightsResult, riskResult, marketImplResult, forecastsResult,
     stocksResult, commoditiesResult, macroResult, predResult,
   ];
+  if (needsMacroEvents) coreResults.push(macroEventsResult);
+  if (needsGoldContext) coreResults.push(goldExtendedResult, goldCotResult, goldEtfResult);
   if (needsEnergyExposure) coreResults.push(energyExposureResult);
   const failCount = coreResults.filter((r) => r.status === 'rejected' || !r.value).length;
 
@@ -1080,6 +1163,8 @@ export async function assembleAnalystContext(
     forecasts: buildForecasts(get(forecastsResult)),
     marketData: buildMarketData(get(stocksResult), commoditiesData),
     macroSignals: buildMacroSignals(get(macroResult)),
+    macroEvents: buildMacroEvents(get(macroEventsResult)),
+    goldContext: buildGoldContext(commoditiesData, get(goldExtendedResult), get(goldCotResult), get(goldEtfResult)),
     energyExposure: buildEnergyExposure(get(energyExposureResult)),
     coalSpotPrice: needsSpotEnergy ? buildSpotCommodityLine(get(commoditiesResult), 'MTF=F', 'Newcastle coal', '$', '/t') : '',
     gasSpotTtf:    needsSpotEnergy ? buildSpotCommodityLine(get(commoditiesResult), 'TTF=F', 'TTF gas', '€')            : '',

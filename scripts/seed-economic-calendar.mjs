@@ -14,7 +14,11 @@ const CACHE_TTL = 129600; // 36h — 3× a 12h cron interval
 // https://api.stlouisfed.org/fred/releases
 const FRED_RELEASES = [
   { id: 10,  event: 'CPI',              unit: '%' },
+  { id: 10,  event: 'Core CPI',         unit: '%' },
+  { id: 46,  event: 'PPI',              unit: '%' },
+  { id: 46,  event: 'Core PPI',         unit: '%' },
   { id: 50,  event: 'Nonfarm Payrolls', unit: 'K' },
+  { id: 50,  event: 'Unemployment Rate', unit: '%' },
   { id: 53,  event: 'GDP',              unit: '%' },
   { id: 54,  event: 'PCE',              unit: '%' },
   { id: 9,   event: 'Retail Sales',     unit: '%' },
@@ -45,6 +49,21 @@ const EUROSTAT_DATASETS = [
   { id: 'une_rt_m',      event: 'EU Unemployment Rate', country: 'EU', impact: 'medium', unit: '%' },
   { id: 'namq_10_gdp',   event: 'Euro Area GDP',        country: 'EA', impact: 'high',   unit: '%' },
 ];
+
+const BLS_TIER_1_EVENTS = new Set([
+  'CPI', 'Core CPI', 'PPI', 'Core PPI', 'Nonfarm Payrolls', 'Unemployment Rate',
+]);
+
+export function addOfficialReleaseTime(event) {
+  if (event.country !== 'US') return event;
+  if (BLS_TIER_1_EVENTS.has(event.event)) {
+    return { ...event, releaseTime: '08:30', timeZone: 'America/New_York' };
+  }
+  if (event.event === 'FOMC Rate Decision') {
+    return { ...event, releaseTime: '14:00', timeZone: 'America/New_York' };
+  }
+  return event;
+}
 
 // Scrape FOMC meeting dates from the official Fed calendar page.
 // Takes the second day of each 2-day meeting as the rate decision date.
@@ -277,7 +296,8 @@ async function fetchEconomicCalendar() {
   if (!apiKey) {
     console.warn('  FRED_API_KEY missing — returning FOMC + ECB + Eurostat dates only');
     events.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
-    return { events, fromDate: today, toDate, total: events.length };
+    const timedEvents = events.map(addOfficialReleaseTime);
+    return { events: timedEvents, fromDate: today, toDate, total: timedEvents.length };
   }
 
   console.log(`  Fetching FRED economic release calendar ${today} → ${toDate}`);
@@ -328,10 +348,11 @@ async function fetchEconomicCalendar() {
   console.log(`  Prints: ${recentPrints.length} series captured, ${filled} event(s) filled with actuals`);
 
   events.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  const timedEvents = events.map(addOfficialReleaseTime);
 
   console.log(`  Total events: ${events.length}`);
 
-  return { events, recentPrints, fromDate: today, toDate, total: events.length };
+  return { events: timedEvents, recentPrints, fromDate: today, toDate, total: timedEvents.length };
 }
 
 function validate(data) {

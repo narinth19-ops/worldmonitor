@@ -8,12 +8,23 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { EVENT_SERIES, computePrintValues, fillEventActuals } from '../scripts/_econ-actuals.mjs';
+import { addOfficialReleaseTime } from '../scripts/seed-economic-calendar.mjs';
 import { scoreImportance } from '../scripts/_clustering.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const readSrc = (rel) => readFileSync(resolve(root, rel), 'utf-8');
 
 describe('computePrintValues (#4922b)', () => {
+  it('assigns only publisher-confirmed Tier 1 release times', () => {
+    assert.deepEqual(addOfficialReleaseTime({ event: 'CPI', country: 'US' }), {
+      event: 'CPI', country: 'US', releaseTime: '08:30', timeZone: 'America/New_York',
+    });
+    assert.deepEqual(addOfficialReleaseTime({ event: 'FOMC Rate Decision', country: 'US' }), {
+      event: 'FOMC Rate Decision', country: 'US', releaseTime: '14:00', timeZone: 'America/New_York',
+    });
+    assert.deepEqual(addOfficialReleaseTime({ event: 'GDP', country: 'US' }), { event: 'GDP', country: 'US' });
+  });
+
   it('pct_mom: index levels become MoM % change with a previous period', () => {
     const obs = [
       { date: '2026-06-01', value: '321.5' },
@@ -82,6 +93,20 @@ describe('computePrintValues (#4922b)', () => {
       assert.ok(['pct_mom', 'diff_k', 'direct'].includes(mapping.transform), `${event} transform`);
     }
   });
+
+  it('maps every Phase 1 Tier 1 print to the official FRED series', () => {
+    assert.deepEqual({
+      'Core CPI': EVENT_SERIES['Core CPI'].series,
+      PPI: EVENT_SERIES.PPI.series,
+      'Core PPI': EVENT_SERIES['Core PPI'].series,
+      'Unemployment Rate': EVENT_SERIES['Unemployment Rate'].series,
+    }, {
+      'Core CPI': 'CPILFESL',
+      PPI: 'PPIFIS',
+      'Core PPI': 'PPIFES',
+      'Unemployment Rate': 'UNRATE',
+    });
+  });
 });
 
 describe('fillEventActuals (#4922b)', () => {
@@ -106,6 +131,18 @@ describe('fillEventActuals (#4922b)', () => {
     const filled = fillEventActuals(events, { CPI: { actual: '+0.3', previous: '+0.2', obsDate: '2026-06-01' } }, TODAY);
     assert.equal(filled, 0);
     assert.equal(events[0].actual, '+0.9');
+  });
+
+  it('fills every newly added Tier 1 print on release day', () => {
+    const events = ['Core CPI', 'PPI', 'Core PPI', 'Unemployment Rate']
+      .map(event => ({ event, date: TODAY, actual: '', previous: '' }));
+    const prints = Object.fromEntries(events.map(({ event }) => [event, {
+      actual: event === 'Unemployment Rate' ? '4.2' : '+0.2',
+      previous: event === 'Unemployment Rate' ? '4.3' : '+0.1',
+      obsDate: '2026-06-01',
+    }]));
+    assert.equal(fillEventActuals(events, prints, TODAY), 4);
+    assert.deepEqual(events.map(event => event.actual), ['+0.2', '+0.2', '+0.2', '4.2']);
   });
 });
 

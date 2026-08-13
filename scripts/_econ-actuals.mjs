@@ -16,7 +16,11 @@
 
 export const EVENT_SERIES = {
   CPI: { series: 'CPIAUCSL', transform: 'pct_mom', freq: 'm' },
+  'Core CPI': { series: 'CPILFESL', transform: 'pct_mom', freq: 'm' },
+  PPI: { series: 'PPIFIS', transform: 'pct_mom', freq: 'm' },
+  'Core PPI': { series: 'PPIFES', transform: 'pct_mom', freq: 'm' },
   'Nonfarm Payrolls': { series: 'PAYEMS', transform: 'diff_k', freq: 'm' },
+  'Unemployment Rate': { series: 'UNRATE', transform: 'direct', freq: 'm' },
   GDP: { series: 'A191RL1Q225SBEA', transform: 'direct', freq: 'q' },
   PCE: { series: 'PCEPI', transform: 'pct_mom', freq: 'm' },
   'Retail Sales': { series: 'RSAFS', transform: 'pct_mom', freq: 'm' },

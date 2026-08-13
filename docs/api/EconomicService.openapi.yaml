@@ -4260,6 +4260,14 @@ components:
                     type: string
                 unit:
                     type: string
+                releaseTime:
+                    type: string
+                    description: |-
+                        Local release time in 24-hour HH:mm format when the official publisher
+                         provides one. Empty means unavailable, never an inferred browser time.
+                timeZone:
+                    type: string
+                    description: IANA timezone for release_time (for example America/New_York).
         GetCrudeInventoriesRequest:
             type: object
             description: GetCrudeInventoriesRequest is the request message for GetCrudeInventories.

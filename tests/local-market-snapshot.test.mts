@@ -14,7 +14,7 @@ function deps(overrides: Partial<SnapshotDependencies> = {}): SnapshotDependenci
     fetchFx: async () => ({ stress: [], usd: [], eur: [], rub: [], degraded: ['stress', 'usd', 'eur', 'rub'] }),
     fetchFred: async () => ({ results: { DGS10: { observations: [{ date: '2026-08-10', value: 4.1 }] } } }),
     fetchEuCurve: async () => ({ data: { rates: { '10Y': 2.5 } } }),
-    fetchCalendar: async () => ({ events: [] }),
+    fetchCalendar: async () => ({ events: [{ event: 'CPI', country: 'US', date: '2026-08-12', impact: 'high', actual: '', estimate: '', previous: '2.8', unit: '%', releaseTime: '08:30', timeZone: 'America/New_York' }] }),
     fetchCot: async () => ({ reportDate: '2026-08-07', instruments: [] }),
     fetchGoldIntelligence: async () => ({ updatedAt: '2026-08-10T23:59:00Z', goldPrice: 2500, drivers: [], cbReserves: { totalTonnes: 0 }, goldSparkline: [1, 2] }),
     fetchHyperliquidFlow: async () => ({ fetchedAt: '2026-08-10T23:58:00Z', warmup: false, assets: [{ symbol: 'BTC', sparkFunding: [1] }] }),
@@ -38,6 +38,11 @@ describe('local browser market snapshot', () => {
     assert.equal(snapshot.domains.gold.cot.observedAt, '2026-08-07');
     assert.equal(snapshot.domains.macroRates.fred.freshness, 'current');
     assert.equal(snapshot.domains.positioning.hyperliquid24x7.freshness, 'current');
+    const eventContext = snapshot.domains.macroRates.eventContext.data as Array<{ id: string; consensus: string | null }>;
+    assert.equal(eventContext[0]?.id, 'us-cpi:2026-08-12');
+    assert.equal(eventContext[0]?.consensus, null);
+    const eventReactions = snapshot.domains.macroRates.eventReactions.data as Array<{ status: string }>;
+    assert.equal(eventReactions[0]?.status, 'awaiting-release');
     assert.equal(snapshot.domains.gold.intelligence.observedAt, '2026-08-10T23:59:00Z');
     assert.equal(snapshot.domains.gold.intelligence.timestampBasis, 'source');
     assert.equal((snapshot.domains.gold.intelligence.data as Record<string, unknown>).cbReserves, undefined);

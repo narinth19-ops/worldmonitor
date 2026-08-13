@@ -1,5 +1,7 @@
 import type { MarketData } from '@/types';
 import type { FxPanelRows } from '@/services/economic';
+import { buildMacroEventContext, type MacroCalendarEvent } from '@/services/macro-event-context';
+import { buildMacroEventReactions, persistReactionSample } from '@/services/macro-event-reactions';
 
 const FRED_SERIES = ['DGS1MO', 'DGS3MO', 'DGS6MO', 'DGS1', 'DGS2', 'DGS5', 'DGS10', 'DGS30', 'FEDFUNDS'] as const;
 const COMMODITIES = [
@@ -268,6 +270,32 @@ export async function collectLocalMarketSnapshot(
   const fearGreed = compact(fearGreedRaw);
   const marketBreadth = compact(marketBreadthRaw);
   const macroSignals = compact(macroSignalsRaw);
+  const calendarPayload = record(calendar.data);
+  const calendarEvents = Array.isArray(calendarPayload?.events)
+    ? calendarPayload.events as MacroCalendarEvent[]
+    : [];
+  const eventContext = available(buildMacroEventContext(calendarEvents, now), retrievedAt, {
+    source: 'economic calendar + deterministic market-impact mapping',
+    status: calendarEvents.length > 0 ? 'available' : 'missing',
+    quality: calendarEvents.length > 0 ? 'good' : 'degraded',
+  });
+  if (calendarEvents.length === 0) eventContext.error = 'Economic calendar contained no usable events';
+  const quoteValue = (symbol: string) => {
+    const value = compactDashboard.find((quote) => quote.symbol === symbol)?.price;
+    return typeof value === 'number' && Number.isFinite(value) ? value : null;
+  };
+  const goldValue = goldQuotes[0]?.price;
+  const reactionSamples = persistReactionSample({
+    observedAt: retrievedAt,
+    gold: typeof goldValue === 'number' && Number.isFinite(goldValue) ? goldValue : null,
+    dxy: quoteValue('DX-Y.NYB'),
+    us10y: quoteValue('^TNX'),
+  }, typeof localStorage === 'undefined' ? undefined : localStorage);
+  const eventReactions = available(
+    buildMacroEventReactions(eventContext.data ?? [], reactionSamples, now),
+    retrievedAt,
+    { source: 'local point-in-time market snapshots', quality: 'good' },
+  );
 
   return {
     schemaVersion: '1.1.0',
@@ -287,7 +315,7 @@ export async function collectLocalMarketSnapshot(
         cot,
       },
       fx: { crossAssetDrivers: dashboard, panel: compact(fx) },
-      macroRates: { fred: compact(fred), euYieldCurve: compact(euCurve), economicCalendar: compact(calendar), macroSignals },
+      macroRates: { fred: compact(fred), euYieldCurve: compact(euCurve), economicCalendar: compact(calendar), eventContext, eventReactions, macroSignals },
       positioning: { hyperliquid24x7: hyperliquid, cot },
       sentimentLiquidity: { fearGreed, marketBreadth, etfFlows, stablecoins },
       commodities: { quotes: compact(commodities), cot },

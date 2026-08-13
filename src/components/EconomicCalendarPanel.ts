@@ -2,6 +2,7 @@ import type { EconomicServiceClient } from '@/generated/client/worldmonitor/econ
 import { Panel } from './Panel';
 import { t } from '@/services/i18n';
 import { escapeHtml, unsafeRawHtml } from '@/utils/sanitize';
+import { buildMacroEventContext, macroEventReleaseInstant } from '@/services/macro-event-context';
 
 let _client: EconomicServiceClient | null = null;
 async function getEconomicClient(): Promise<EconomicServiceClient> {
@@ -47,6 +48,8 @@ interface EconomicEvent {
   estimate: string;
   previous: string;
   unit: string;
+  releaseTime: string;
+  timeZone: string;
 }
 
 function groupByDate(events: EconomicEvent[]): Map<string, EconomicEvent[]> {
@@ -71,7 +74,17 @@ function fmtVal(val: string, unit: string): string {
   return unit ? `${val} ${unit}` : val;
 }
 
-function countdown(dateStr: string): string {
+function countdown(event: EconomicEvent): string {
+  const release = macroEventReleaseInstant(event);
+  if (release) {
+    const diffMs = release.getTime() - Date.now();
+    if (diffMs > 0 && diffMs < 48 * 3_600_000) {
+      const hours = Math.floor(diffMs / 3_600_000);
+      const minutes = Math.max(0, Math.ceil((diffMs % 3_600_000) / 60_000));
+      return hours > 0 ? `in ${hours}h ${minutes}m` : `in ${minutes}m`;
+    }
+  }
+  const dateStr = event.date;
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const d = new Date(`${dateStr}T00:00:00`);
@@ -82,6 +95,17 @@ function countdown(dateStr: string): string {
   if (days < 0) return Math.abs(days) < 14 ? `${Math.abs(days)}d ago` : `${Math.round(Math.abs(days) / 7)}w ago`;
   if (days < 14) return `in ${days}d`;
   return `in ${Math.round(days / 7)}w`;
+}
+
+function releaseLabel(event: EconomicEvent): string {
+  const release = macroEventReleaseInstant(event);
+  if (release) {
+    const diffMs = release.getTime() - Date.now();
+    if (diffMs > 0 && diffMs < 48 * 3_600_000) return countdown(event);
+  }
+  if (!event.releaseTime) return countdown(event);
+  const zone = event.timeZone === 'America/New_York' ? 'ET' : event.timeZone;
+  return `${event.releaseTime}${zone ? ` ${zone}` : ''}`;
 }
 
 export class EconomicCalendarPanel extends Panel {
@@ -182,6 +206,7 @@ export class EconomicCalendarPanel extends Panel {
         const impactColor = IMPACT_COLORS[impact] ?? IMPACT_COLORS.low;
         const flag = COUNTRY_FLAGS[ev.country] ?? escapeHtml(ev.country);
         const isHigh = impact === 'high';
+        const macroContext = buildMacroEventContext([ev])[0];
 
         // Right column: actual value when released, countdown otherwise
         let rightLabel: string;
@@ -190,7 +215,7 @@ export class EconomicCalendarPanel extends Panel {
           rightLabel = escapeHtml(fmtVal(ev.actual, ev.unit));
           rightStyle = 'color:var(--text);font-weight:600';
         } else {
-          rightLabel = escapeHtml(countdown(ev.date));
+          rightLabel = escapeHtml(releaseLabel(ev));
           rightStyle = 'color:rgba(255,255,255,0.35);font-style:italic';
         }
 
@@ -203,6 +228,21 @@ export class EconomicCalendarPanel extends Panel {
           </td>
           <td style="padding:4px 0;text-align:right;font-variant-numeric:tabular-nums;${rightStyle};white-space:nowrap">${rightLabel}</td>
         </tr>`;
+        if (macroContext) {
+          const value = (raw: string) => `${raw}${macroContext.unit ? ` ${macroContext.unit}` : ''}`;
+          const values = [
+            macroContext.previous ? `Prev ${value(macroContext.previous)}` : '',
+            macroContext.consensus ? `Cons ${value(macroContext.consensus)}` : 'Consensus unavailable',
+            macroContext.actual ? `Actual ${value(macroContext.actual)}` : '',
+          ].filter(Boolean).join(' · ');
+          bodyRows += `<tr>
+            <td colspan="3" style="padding:0 0 7px 23px;font-size:9px;line-height:1.35;color:rgba(255,255,255,0.38)">
+              <div>${escapeHtml(values)}</div>
+              <div>Hotter/stronger → ${escapeHtml(macroContext.hotterOrStronger)}</div>
+              <div>Cooler/weaker → ${escapeHtml(macroContext.coolerOrWeaker)}</div>
+            </td>
+          </tr>`;
+        }
       }
     }
 

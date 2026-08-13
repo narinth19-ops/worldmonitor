@@ -20,6 +20,11 @@ message EconomicEvent {
   string estimate = 6;
   string previous = 7;
   string unit = 8;
+  // Local release time in 24-hour HH:mm format when the official publisher
+  // provides one. Empty means unavailable, never an inferred browser time.
+  string release_time = 9;
+  // IANA timezone for release_time (for example America/New_York).
+  string time_zone = 10;
 }
 
 message GetEconomicCalendarResponse {
