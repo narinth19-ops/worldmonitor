@@ -3264,6 +3264,16 @@ export class App {
       () => this.isPanelNearViewport('gold-intelligence')
     );
     this.refreshScheduler.scheduleRefresh(
+      'macro-reaction-sampling',
+      async () => {
+        const { sampleMacroEventReactions } = await import('@/services/macro-reaction-sampler');
+        return sampleMacroEventReactions();
+      },
+      REFRESH_INTERVALS.macroReactionSampling,
+      () => ['full', 'finance', 'commodity'].includes(SITE_VARIANT),
+      { runImmediately: true }
+    );
+    this.refreshScheduler.scheduleRefresh(
       'aaii-sentiment',
       () => this.dataLoader.loadAaiiSentiment(),
       REFRESH_INTERVALS.aaiiSentiment,

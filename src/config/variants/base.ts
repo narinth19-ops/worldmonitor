@@ -79,6 +79,7 @@ export const REFRESH_INTERVALS = {
   economicCalendar: 60 * 60 * 1000,
   cotPositioning: 60 * 60 * 1000,
   goldIntelligence: 5 * 60 * 1000,
+  macroReactionSampling: 5 * 60 * 1000,
   aaiiSentiment: 60 * 60 * 1000, // weekly data; hourly refresh is sufficient
   marketBreadth: 60 * 60 * 1000, // seeded daily; hourly refresh is sufficient
 };

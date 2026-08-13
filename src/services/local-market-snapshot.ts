@@ -1,7 +1,12 @@
 import type { MarketData } from '@/types';
 import type { FxPanelRows } from '@/services/economic';
 import { buildMacroEventContext, type MacroCalendarEvent } from '@/services/macro-event-context';
-import { buildMacroEventReactions, persistReactionSample } from '@/services/macro-event-reactions';
+import {
+  buildMacroEventReactions,
+  isMacroReactionSamplingWindow,
+  persistReactionSample,
+  readReactionSamples,
+} from '@/services/macro-event-reactions';
 
 const FRED_SERIES = ['DGS1MO', 'DGS3MO', 'DGS6MO', 'DGS1', 'DGS2', 'DGS5', 'DGS10', 'DGS30', 'FEDFUNDS'] as const;
 const COMMODITIES = [
@@ -285,12 +290,15 @@ export async function collectLocalMarketSnapshot(
     return typeof value === 'number' && Number.isFinite(value) ? value : null;
   };
   const goldValue = goldQuotes[0]?.price;
-  const reactionSamples = persistReactionSample({
-    observedAt: retrievedAt,
-    gold: typeof goldValue === 'number' && Number.isFinite(goldValue) ? goldValue : null,
-    dxy: quoteValue('DX-Y.NYB'),
-    us10y: quoteValue('^TNX'),
-  }, typeof localStorage === 'undefined' ? undefined : localStorage);
+  const reactionStorage = typeof localStorage === 'undefined' ? undefined : localStorage;
+  const reactionSamples = isMacroReactionSamplingWindow(eventContext.data ?? [], now)
+    ? persistReactionSample({
+      observedAt: retrievedAt,
+      gold: typeof goldValue === 'number' && Number.isFinite(goldValue) ? goldValue : null,
+      dxy: quoteValue('DX-Y.NYB'),
+      us10y: quoteValue('^TNX'),
+    }, reactionStorage)
+    : readReactionSamples(reactionStorage);
   const eventReactions = available(
     buildMacroEventReactions(eventContext.data ?? [], reactionSamples, now),
     retrievedAt,
